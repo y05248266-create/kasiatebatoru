@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>最大4人対戦 歌詞並べ替えゲーム</title>
+
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.5.1/dist/confetti.browser.min.js"></script>
+
+<style>
+body { font-family: sans-serif; background: #f4f4f9; text-align: center; padding: 10px; margin: 0; }
+.container { max-width: 900px; margin: auto; background: white; padding: 15px; border-radius: 12px; box-shadow: 0 0 10px rgba(0,0,0,.1); }
+
+#setup { background: #e3f2fd; padding: 15px; border-radius: 8px; margin-bottom: 15px; }
+#status { font-weight: bold; color: #d32f2f; margin: 10px 0; min-height: 24px; }
+
+/* 参加者全員の進捗エリア */
+#players-progress { background: #fff3e0; padding: 10px; border-radius: 8px; margin-bottom: 15px; text-align: left; }
+.player-row { margin-bottom: 8px; font-size: 13px; font-weight: bold; }
+.progress-bar-bg { background: #e0e0e0; height: 12px; border-radius: 6px; overflow: hidden; margin-top: 3px; }
+.progress-bar-fill { background: #ff9800; height: 100%; width: 0%; transition: width 0.3s; }
+
+.mode-select { margin-bottom: 15px; }
+.mode-select select, input { padding: 8px 12px; font-size: 16px; border-radius: 6px; border: 1px solid #ccc; }
+
+.controls { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+button { padding: 10px 16px; font-size: 14px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
+.btn-primary { background: #4a90e2; color: white; }
+.btn-secondary { background: #6c757d; color: white; }
+.btn-warning { background: #ffc107; color: #212529; }
+.btn-success { background: #28a745; color: white; }
+button:hover { opacity: 0.9; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.answer-area { display: flex; gap: 8px; overflow-x: auto; padding: 10px; background: #eef; border-radius: 10px; margin-bottom: 15px; min-height: 90px; }
+.slot { min-width: 140px; max-width: 180px; min-height: 70px; border: 2px dashed #4a90e2; border-radius: 8px; background: white; display: flex; align-items: center; justify-content: center; text-align: center; padding: 6px; cursor: pointer; flex-shrink: 0; font-size: 13px; word-break: break-all; }
+.correct { background: #d4edda; border-color: #28a745; }
+.wrong { background: #f8d7da; border-color: #dc3545; }
+
+.cards { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; max-height: 350px; overflow-y: auto; padding: 5px; }
+.card { background: #4a90e2; color: white; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; max-width: 100%; text-align: left; }
+
+#timer { font-size: 20px; font-weight: bold; margin: 5px; }
+#result { font-size: 18px; font-weight: bold; margin: 10px; }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+<h1>🎵 最大4人対戦 歌詞並べ替え</h1>
+
+<div id="setup">
+    <h3>合言葉（ID）を入力</h3>
+    <input type="text" id="room-id" placeholder="例: lyric4p" value="lyric4p">
+    <br><br>
+    <button class="btn-primary" onclick="startHost()">部屋を作る (ホスト)</button>
+    <button class="btn-primary" onclick="startJoin()">部屋に入る (参加者)</button>
+</div>
+
+<div id="status">IDを入力して接続してください</div>
+
+<div id="players-progress">
+    <div style="font-weight:bold; margin-bottom:5px;">📊 プレイヤー進捗状況</div>
+    <div id="progress-list">参加者を待っています...</div>
+</div>
+
+<div class="mode-select">
+    <label for="mode">難易度：</label>
+    <select id="mode" disabled>
+        <option value="sabi">カンタン (サビだけ - 4行)</option>
+        <option value="half">フツウ (前半 - 12行)</option>
+        <option value="full">ムズカシイ (フル選択 - 全34行)</option>
+    </select>
+    <button id="btn-start" class="btn-success" onclick="hostStartGame()" style="display:none;">全員でスタート！</button>
+</div>
+
+<div id="timer">⏱ 0秒</div>
+
+<div id="answerArea" class="answer-area"></div>
+
+<div class="controls">
+    <button id="btn-check" class="btn-primary" onclick="checkAnswer()" disabled>答え合わせ</button>
+    <button id="btn-hint" class="btn-warning" onclick="useHint()" disabled>💡 ヒント</button>
+    <button id="btn-undo" class="btn-secondary" onclick="undoLast()" disabled>1つ戻す</button>
+</div>
+
+<div id="result"></div>
+<div id="cardArea" class="cards"></div>
+
+</div>
+
+<script>
+const fullSong = [
+'「"わたし"は今 どこにあるの」と', 'ふみしめた足あとを何度もみつめかえす', 'かれはをだき 秋めくまどべに',
+'かじかんだ指先で夢をえがいた', 'つばさはあるのに飛べずにいるんだ', '１人になるのがこわくてつらくて',
+'優しいひだまりに かたよせる日々を', 'こえて 僕ら こどくなゆめへと 歩く', '①サヨナラは悲しい言葉じゃない',
+'①それぞれの夢へと 僕らをつなぐYELL', '①ともにすごした日々を胸に抱いて', '①飛び立つよひとりでつぎの 空へ',
+'僕らは なぜ 答えをあせって', 'あての無い暗がりに じぶんを探すのだろう', '誰かを ただ おもう涙も',
+'真っすぐな笑顔も ここにあるのに', 'えいえんなど無いと（気づいたときから）', '笑いあったあの日も（うたい合ったあの日も）',
+'強く（深く）胸にきざまれていく', 'だからこそあなたは（だからこそ僕らは）', '他の誰でもない（誰にも負けない）',
+'声を（あげて）', 'わたしを生きていくよと（生きていくよと）', '約束したんだ',
+'ひとり（ひとり）ひとつ（ひとつ）', '道を 選んだ', '②サヨナラは悲しい言葉じゃない',
+'②それぞれの夢へと僕らをつなぐ YELL', 'いつかまためぐりあうそのときまで', '忘れはしないほこりよ 友よ 空へ',
+'僕らが分かち合う言葉がある', 'こころからこころへ声をつなぐ YELL', '②ともに過ごした日々を胸に抱いて',
+'②飛び立つよ 独りで 未来の 空へ'
+];
+
+let peer = null;
+let connections = []; // ホスト用：全参加者の接続リスト
+let hostConn = null;  // 参加者用：ホストへの接続
+let isHost = false;
+let myPlayerId = "";
+
+let playersData = {}; // 全員の進捗 { id: { name, filled, total, isWin } }
+let correctOrder = [], cards = [], answers = [], historyStack = [];
+let startTime, timerId, isFinished = false;
+
+function setStatus(msg) { document.getElementById('status').innerText = msg; }
+
+// --- ネットワーク処理 ---
+function startHost() {
+    const roomId = document.getElementById('room-id').value;
+    if(!roomId) return alert('IDを入力してください');
+    isHost = true;
+    myPlayerId = "P1(ホスト)";
+    document.getElementById('mode').disabled = false;
+    document.getElementById('btn-start').style.display = 'inline-block';
+    setStatus('部屋を作成中...');
+
+    peer = new Peer('lyric-4p-' + roomId);
+    peer.on('open', id => {
+        setStatus(`部屋を作成しました (ID: ${roomId})。メンバーの参加を待っています。`);
+        playersData[myPlayerId] = { name: myPlayerId, filled: 0, total: 0, isWin: false };
+        updateProgressUI();
+    });
+
+    peer.on('connection', conn => {
+        if (connections.length >= 3) { // ホスト含め最大4人
+            conn.send({ type: 'REJECT', msg: '満員です（最大4人）' });
+            setTimeout(() => conn.close(), 500);
+            return;
+        }
+        
+        const pNum = connections.length + 2;
+        const pId = `P${pNum}`;
+        conn.pId = pId;
+        connections.push(conn);
+
+        playersData[pId] = { name: pId, filled: 0, total: 0, isWin: false };
+
+        conn.on('open', () => {
+            conn.send({ type: 'ASSIGN_ID', id: pId });
+            broadcastPlayersData();
+        });
+
+        conn.on('data', data => handleData(data, pId));
+        conn.on('close', () => {
+            delete playersData[pId];
+            connections = connections.filter(c => c !== conn);
+            broadcastPlayersData();
+        });
+    });
+}
+
+function startJoin() {
+    const roomId = document.getElementById('room-id').value;
+    if(!roomId) return alert('IDを入力してください');
+    isHost = false;
+    setStatus('接続中...');
+
+    peer = new Peer();
+    peer.on('open', () => {
+        hostConn = peer.connect('lyric-4p-' + roomId);
+        hostConn.on('open', () => {
+            setStatus('ホストに接続しました。開始を待っています...');
+            document.getElementById('setup').style.display = 'none';
+        });
+        hostConn.on('data', data => handleData(data, 'HOST'));
+    });
+}
+
+function broadcast(data) {
+    connections.forEach(c => c.send(data));
+}
+
+function broadcastPlayersData() {
+    updateProgressUI();
+    broadcast({ type: 'UPDATE_PLAYERS', players: playersData });
+}
+
+function handleData(data, senderId) {
+    if (data.type === 'ASSIGN_ID') {
+        myPlayerId = data.id;
+        setStatus(`あなたは [${myPlayerId}] です。開始を待っています...`);
+    } else if (data.type === 'UPDATE_PLAYERS') {
+        playersData = data.players;
+        updateProgressUI();
+    } else if (data.type === 'START_GAME') {
+        correctOrder = data.correctOrder;
+        cards = data.cards;
+        answers = new Array(correctOrder.length).fill("");
+        startLocalGame();
+    } else if (data.type === 'PROGRESS' && isHost) {
+        if (playersData[senderId]) {
+            playersData[senderId].filled = data.filled;
+            playersData[senderId].total = data.total;
+            broadcastPlayersData();
+        }
+    } else if (data.type === 'WIN') {
+        playersData[data.winnerId].isWin = true;
+        if (isHost) broadcastPlayersData();
+        
+        if (data.winnerId !== myPlayerId && !isFinished) {
+            isFinished = true;
+            clearInterval(timerId);
+            document.getElementById("result").style.color = "#dc3545";
+            document.getElementById("result").textContent = `❌ 勝者決定！ [${data.winnerId}] が先にクリアしました！`;
+            disableControls(true);
+        }
+    } else if (data.type === 'REJECT') {
+        alert(data.msg);
+    }
+}
+
+// --- 進捗画面描画 ---
+function updateProgressUI() {
+    const list = document.getElementById('progress-list');
+    list.innerHTML = '';
+
+    Object.keys(playersData).forEach(id => {
+        const p = playersData[id];
+        const percent = p.total > 0 ? Math.floor((p.filled / p.total) * 100) : 0;
+        
+        const row = document.createElement('div');
+        row.className = 'player-row';
+        row.innerHTML = `
+            ${p.name} ${p.isWin ? '👑 勝利！' : ''}: ${p.filled} / ${p.total} (${percent}%)
+            <div class="progress-bar-bg">
+                <div class="progress-bar-fill" style="width: ${percent}%; ${p.isWin ? 'background:#28a745;' : ''}"></div>
+            </div>
+        `;
+        list.appendChild(row);
+    });
+}
+
+// --- ゲーム進行制御 ---
+function hostStartGame() {
+    const mode = document.getElementById("mode").value;
+    if (mode === "sabi") correctOrder = fullSong.slice(8, 12);
+    else if (mode === "half") correctOrder = fullSong.slice(0, 12);
+    else correctOrder = [...fullSong];
+
+    cards = [...correctOrder].sort(() => Math.random() - 0.5);
+    answers = new Array(correctOrder.length).fill("");
+
+    // 全員のStateリセット
+    Object.keys(playersData).forEach(id => {
+        playersData[id].filled = 0;
+        playersData[id].total = correctOrder.length;
+        playersData[id].isWin = false;
+    });
+
+    broadcast({ type: 'START_GAME', correctOrder, cards });
+    broadcastPlayersData();
+    startLocalGame();
+}
+
+function startLocalGame() {
+    isFinished = false;
+    historyStack = [];
+    document.getElementById("result").textContent = "";
+    document.getElementById('setup').style.display = 'none';
+    disableControls(false);
+
+    startTime = Date.now();
+    clearInterval(timerId);
+    timerId = setInterval(() => {
+        if(!isFinished){
+            const sec = Math.floor((Date.now() - startTime) / 1000);
+            document.getElementById("timer").textContent = `⏱ ${sec}秒`;
+        }
+    }, 1000);
+
+    renderSlots();
+    renderCards();
+    sendProgress();
+}
+
+function disableControls(disabled) {
+    document.getElementById("btn-check").disabled = disabled;
+    document.getElementById("btn-hint").disabled = disabled;
+    document.getElementById("btn-undo").disabled = disabled;
+}
+
+function sendProgress() {
+    const filled = answers.filter(a => a !== "").length;
+    playersData[myPlayerId].filled = filled;
+    playersData[myPlayerId].total = correctOrder.length;
+    updateProgressUI();
+
+    if (isHost) {
+        broadcastPlayersData();
+    } else if (hostConn) {
+        hostConn.send({ type: 'PROGRESS', filled: filled, total: correctOrder.length });
+    }
+}
+
+// --- カード操作・判定 ---
+function renderSlots(){
+    const area = document.getElementById("answerArea");
+    area.innerHTML = "";
+
+    answers.forEach((item, index) => {
+        const div = document.createElement("div");
+        div.className = "slot";
+
+        if(item){
+            if(item === correctOrder[index]) div.classList.add("correct");
+            else div.classList.add("wrong");
+        }
+
+        div.textContent = item || `□ ${index + 1}`;
+        div.onclick = () => {
+            if(item && !isFinished){
+                cards.push(item);
+                answers[index] = "";
+                renderSlots();
+                renderCards();
+                sendProgress();
+            }
+        };
+        area.appendChild(div);
+    });
+}
+
+function renderCards(){
+    const area = document.getElementById("cardArea");
+    area.innerHTML = "";
+
+    cards.forEach((card, index) => {
+        const div = document.createElement("div");
+        div.className = "card";
+        div.textContent = card;
+
+        div.onclick = () => {
+            if(isFinished) return;
+            const empty = answers.findIndex(a => a === "");
+            if(empty !== -1){
+                answers[empty] = card;
+                cards.splice(index, 1);
+                historyStack.push({ card, index: empty });
+                renderSlots();
+                renderCards();
+                sendProgress();
+            }
+        };
+        area.appendChild(div);
+    });
+}
+
+function useHint(){
+    if(isFinished) return;
+    const targetIndex = answers.findIndex((a, i) => a !== correctOrder[i]);
+    if(targetIndex === -1) return;
+
+    const correctText = correctOrder[targetIndex];
+    const currentPos = answers.indexOf(correctText);
+
+    if(currentPos !== -1) answers[currentPos] = "";
+    else {
+        const cardIndex = cards.indexOf(correctText);
+        if(cardIndex !== -1) cards.splice(cardIndex, 1);
+    }
+
+    answers[targetIndex] = correctText;
+    renderSlots();
+    renderCards();
+    sendProgress();
+}
+
+function undoLast(){
+    if(historyStack.length === 0 || isFinished) return;
+    const last = historyStack.pop();
+    cards.push(last.card);
+    answers[last.index] = "";
+    renderSlots();
+    renderCards();
+    sendProgress();
+}
+
+function checkAnswer(){
+    if(isFinished) return;
+    const correct = answers.every((a, i) => a === correctOrder[i]);
+    const result = document.getElementById("result");
+
+    if(!correct){
+        result.style.color = "#dc3545";
+        result.textContent = "❌ 違う場所があります（緑：正解 / 赤：間違い）";
+        renderSlots();
+        return;
+    }
+
+    isFinished = true;
+    clearInterval(timerId);
+    const time = Math.floor((Date.now() - startTime) / 1000);
+
+    result.style.color = "#28a745";
+    result.textContent = `🎉 あなた( ${myPlayerId} )の勝利！ クリアタイム: ${time}秒`;
+    confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+
+    playersData[myPlayerId].isWin = true;
+
+    const winData = { type: 'WIN', winnerId: myPlayerId };
+    if (isHost) {
+        broadcast(winData);
+        broadcastPlayersData();
+    } else if (hostConn) {
+        hostConn.send(winData);
+    }
+    
+    disableControls(true);
+}
+</script>
+</body>
+</html>
